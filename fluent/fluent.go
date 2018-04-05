@@ -55,9 +55,11 @@ type Fluent struct {
 	mubuff  sync.Mutex
 	pending []byte
 
-	muconn       sync.Mutex
-	conn         net.Conn
-	reconnecting bool
+	muconn sync.Mutex
+	conn   net.Conn
+
+	// NewData is a channel that is sent a boolean every time new data is posted
+	NewData chan bool
 }
 
 // New creates a new Logger.
@@ -90,10 +92,20 @@ func New(config Config) (f *Fluent, err error) {
 		config.MaxRetry = defaultMaxRetry
 	}
 	if config.AsyncConnect {
-		f = &Fluent{Config: config, reconnecting: true}
-		go f.reconnect()
+		f = &Fluent{
+			Config:  config,
+			NewData: make(chan bool),
+		}
+		go func() {
+			if err := f.Reconnect(); err != nil {
+				panic(err)
+			}
+		}()
 	} else {
-		f = &Fluent{Config: config, reconnecting: false}
+		f = &Fluent{
+			Config:  config,
+			NewData: make(chan bool),
+		}
 		err = f.connect()
 	}
 	return
@@ -190,9 +202,10 @@ func (f *Fluent) postRawData(data []byte) error {
 	if err := f.appendBuffer(data); err != nil {
 		return err
 	}
-	if err := f.send(); err != nil {
-		f.close()
-		return err
+	// send bool on SendNotifications
+	select {
+	case f.NewData <- true:
+	default:
 	}
 	return nil
 }
@@ -227,15 +240,6 @@ func (f *Fluent) EncodeData(tag string, tm time.Time, message interface{}) (data
 	return
 }
 
-// Close closes the connection.
-func (f *Fluent) Close() (err error) {
-	if len(f.pending) > 0 {
-		err = f.send()
-	}
-	f.close()
-	return
-}
-
 // appendBuffer appends data to buffer with lock.
 func (f *Fluent) appendBuffer(data []byte) error {
 	f.mubuff.Lock()
@@ -248,7 +252,7 @@ func (f *Fluent) appendBuffer(data []byte) error {
 }
 
 // close closes the connection.
-func (f *Fluent) close() {
+func (f *Fluent) Close() {
 	f.muconn.Lock()
 	if f.conn != nil {
 		f.conn.Close()
@@ -270,10 +274,6 @@ func (f *Fluent) connect() (err error) {
 	default:
 		err = net.UnknownNetworkError(f.Config.FluentNetwork)
 	}
-
-	if err == nil {
-		f.reconnecting = false
-	}
 	return
 }
 
@@ -281,32 +281,27 @@ func e(x, y float64) int {
 	return int(math.Pow(x, y))
 }
 
-func (f *Fluent) reconnect() {
+func (f *Fluent) Reconnect() error {
 	for i := 0; ; i++ {
 		err := f.connect()
 		if err == nil {
-			f.send()
-			return
+			return nil
 		}
 		if i == f.Config.MaxRetry {
 			// TODO: What we can do when connection failed MaxRetry times?
-			panic("fluent#reconnect: failed to reconnect!")
+			return errors.New(fmt.Sprintf("fluent#reconnect: failed to reconnect!"))
 		}
 		waitTime := f.Config.RetryWait * e(defaultReconnectWaitIncreRate, float64(i-1))
 		time.Sleep(time.Duration(waitTime) * time.Millisecond)
 	}
 }
 
-func (f *Fluent) send() error {
+func (f *Fluent) Send() error {
 	f.muconn.Lock()
 	defer f.muconn.Unlock()
 
 	if f.conn == nil {
-		if f.reconnecting == false {
-			f.reconnecting = true
-			go f.reconnect()
-		}
-		return errors.New("fluent#send: can't send logs, client is reconnecting")
+		panic("fluent#send: send called with nil connection")
 	}
 
 	f.mubuff.Lock()
