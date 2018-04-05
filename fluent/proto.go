@@ -48,7 +48,7 @@ type MessageExt struct {
 type EventTime time.Time
 
 const (
-	extensionType = 0
+	extensionType = 10
 	length        = 8
 )
 
