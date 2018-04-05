@@ -289,7 +289,7 @@ func (f *Fluent) Reconnect() error {
 		}
 		if i == f.Config.MaxRetry {
 			// TODO: What we can do when connection failed MaxRetry times?
-			return errors.New(fmt.Sprintf("fluent#reconnect: failed to reconnect!"))
+			return errors.New("fluent#reconnect: failed to reconnect!")
 		}
 		waitTime := f.Config.RetryWait * e(defaultReconnectWaitIncreRate, float64(i-1))
 		time.Sleep(time.Duration(waitTime) * time.Millisecond)
@@ -301,7 +301,7 @@ func (f *Fluent) Send() error {
 	defer f.muconn.Unlock()
 
 	if f.conn == nil {
-		panic("fluent#send: send called with nil connection")
+		return errors.New("fluent#send: send called with nil connection")
 	}
 
 	f.mubuff.Lock()
